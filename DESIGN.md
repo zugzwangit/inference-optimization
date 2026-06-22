@@ -31,7 +31,8 @@ below is judged against that goal.
 ## 1. Design Principles & Workload Taxonomy
 
 The three kinds of models we serve are slow for different reasons, so we tune each one separately
-instead of forcing a single setup on the whole fleet:
+instead of forcing a single setup on the whole fleet (for the full per-model precision and
+memory-technique recipe, see §2.4):
 
 | Model type | Its main bottleneck | Main fix we apply | What matters most |
 |---|---|---|---|
@@ -111,6 +112,24 @@ and AMD) - the heavy MoE math, the fewer-bit matrix multiplies, and the attentio
 on each vendor's ready-made libraries (CUTLASS on NVIDIA, Composable Kernel on AMD) where those are
 already faster. Every custom kernel is auto-tuned for each chip and must pass a speed test and a
 "same numbers as before" correctness test before it ships.
+
+### 2.4 Per-model recipe
+
+The sections above are organized by *component* (precision) and by *technique* (memory). This table
+flips that around and lists, for each model type, the precision settings (§2.1) and the compute and
+memory techniques (§2.2) we actually apply. Two rules of thumb hold across all of them: protect the
+sensitive parts (router, final layer) at 16-bit, and FlashAttention + paged KV help everything.
+
+| Model type | Precision strategy (§2.1) | Compute & memory techniques (§2.2) |
+|---|---|---|
+| **Giant MoE (200B+)** | Expert weights **FP8** (FP4 experimental on newest chips, gated by tests); router **BF16** (never skimp); attention **BF16**; KV cache **FP8**; final layer **BF16** | Fused MoE kernel (grouped-GEMM); FlashAttention; **paged KV** in FP8; operator fusion. Long-prompt tricks only if it also serves long context |
+| **Dense long-context reasoning** | Weights **FP8**; attention **BF16**; KV cache **FP8** (INT8 if quality holds); final layer **BF16** | Heaviest user of §2.2: FlashAttention (essential), **chunked prefill**, KV compression, sliding-window/attention-sink where allowed, paged KV |
+| **Small model - standalone service** | **FP8** (conservative; FP4 only if it passes the accuracy gate, since users see its output) | Paged KV; **continuous batching** to pack requests; high replica count. Rarely needs long-prompt tricks |
+| **Small model - speculator** | **FP4 aggressive** (the big model verifies every token, so errors only cost a little speed, never correctness) | Lightweight and co-located with the target model; the gain comes from speculative decoding, not memory tricks |
+
+Note on the small model: it is the *same checkpoint* deployed twice with different precision profiles,
+because its tolerable precision depends on whether a user sees its output (standalone) or the big
+model verifies it (speculator) - see the role discussion in §2.1.
 
 ---
 
