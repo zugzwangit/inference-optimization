@@ -343,3 +343,7 @@ to the data plane and relays the streamed tokens to the client. The control plan
 publishing validated models and config to the data plane, and telling the endpoint which model
 versions are live and at what SLO tier. This separation keeps the public surface stable even as
 models and infrastructure change behind it.
+
+A Java/Spring Boot skeleton illustrating this endpoint's structure (OpenAI-compatible API, auth and
+tenancy, SSE streaming, and black-box boundaries to the data and control planes) lives in
+[`examples/inference-endpoint-java/`](examples/inference-endpoint-java/).

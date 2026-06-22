@@ -13,6 +13,7 @@ This repository is the deliverable for the "Kernel Optimization for AI Inference
 | [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) | Staff-level high-level system design: the control plane (model configuration lifecycle, A-Z, including CI/validation gates) and the data plane (inference serving path), with system + lifecycle diagrams. |
 | [`GLOSSARY.md`](GLOSSARY.md) | Plain-language definitions of every term used in the spec. Read this first if any jargon is unfamiliar. |
 | [`docs/diagrams.md`](docs/diagrams.md) | All architecture diagrams (Mermaid source, renders natively on GitHub). |
+| [`examples/inference-endpoint-java/`](examples/inference-endpoint-java/) | Spring Boot template showing the structure of the inference service endpoint (OpenAI-compatible API, auth/tenancy, SSE streaming, black-box data/control-plane boundaries). Illustrative skeleton, not a working engine. |
 
 ## How to read it
 
