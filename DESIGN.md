@@ -22,6 +22,10 @@ below is judged against that goal.
 > *Quantization* = storing the model's numbers with fewer bits (FP8/INT8/FP4) to go faster and use less memory, at some risk to accuracy.
 > *TP/PP/DP/EP* = four ways to split a model across GPUs (tensor / pipeline / data / expert).
 
+> For the platform that turns a model into a served endpoint - the control plane (model setup
+> lifecycle and CI/validation gates) and the data plane (serving path) - see
+> [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md).
+
 ---
 
 ## 1. Design Principles & Workload Taxonomy

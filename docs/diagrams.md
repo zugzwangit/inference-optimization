@@ -3,6 +3,10 @@
 Full-size Mermaid diagrams for the inference optimization design. These render natively on GitHub.
 A condensed subset is inlined in [`../DESIGN.md`](../DESIGN.md).
 
+For the platform-level system design (control plane / data plane) and its two diagrams - high-level
+architecture and the model onboarding lifecycle with CI gates - see
+[`../SYSTEM_DESIGN.md`](../SYSTEM_DESIGN.md).
+
 ---
 
 ## 1. System Architecture
