@@ -69,6 +69,9 @@ Grouped so you can scan quickly. If you read only one section, read **Core Flow*
 - **Disaggregated prefill/decode** - Running the compute-bound prefill phase and the memory-bound decode phase on **separate** pools of machines, each tuned for its job. Requires shipping the KV cache from a prefill machine to a decode machine.
 - **Session affinity** - Routing a user's follow-up requests to the machine that already holds their cached state, to avoid recomputing it.
 - **Latency compounding (agentic)** - Agents make many back-to-back model calls; small delays per call add up into a big total. Caching and session affinity fight this.
+- **Request routing / tiered routing** - The router deciding *which model tier* should handle a request (cheap small model vs. expensive big model) based on estimated difficulty, to save cost on easy requests.
+- **Model cascade / escalation** - Let the small model answer first; if its confidence is low, "escalate" the request to a bigger model. Saves cost on the easy majority while protecting quality on the hard cases.
+- **Standalone tier** - Serving real client traffic directly from the small model (its own product tier), as opposed to using it only as a speculator.
 
 ## Infrastructure & Operations
 

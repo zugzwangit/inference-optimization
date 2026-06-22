@@ -2,7 +2,8 @@
 
 **Scope.** A production-grade performance architecture for a flagship, multi-tenant inference
 endpoint that concurrently serves three workload classes - large Mixture-of-Experts (MoE) models
-(200B+ params), dense long-context reasoning models, and small quantized draft models - across a
+(200B+ params), dense long-context reasoning models, and small quantized models (served both as a
+standalone fast tier and as speculative-decoding drafts) - across a
 heterogeneous fleet of NVIDIA (H200/B300) and AMD (MI300X/MI325X/MI350X) nodes in 1x and 8x slugs,
 with NVLink/xGMI intra-node and 25 Gbps inter-node VPC networking.
 
@@ -29,7 +30,12 @@ applying one config fleet-wide:
 |---|---|---|---|
 | MoE 200B+ | Memory capacity + all-to-all routing traffic | Expert Parallelism, FP8/FP4 expert weights, intra-node placement | Throughput, tokens/sec/$ |
 | Dense long-context reasoning | Attention memory (KV) + HBM bandwidth | FlashAttention, chunked prefill, KV quantization | TTFT on long prompts, TPOT |
-| Small quantized draft | Latency / launch overhead | Co-location as speculator for big models | ITL |
+| Small quantized model - standalone tier | Throughput / launch overhead on cheap nodes | High DP replica count on 1x nodes, aggressive continuous batching, request routing | TTFT + tokens/sec/$ |
+| Small quantized model - speculator | Latency / launch overhead | Co-location as draft for big models (speculative decoding) | ITL |
+
+The small quantized model plays a **dual role**: it both serves easy requests directly as the
+cheapest tier *and* acts as a speculator that accelerates the big models (see request routing in
+§3.4). The two roles have different quality requirements, discussed in §2.1.
 
 Two cross-cutting principles drive the architecture: **(a) separate the two phases of generation**
 (prefill is compute-bound, decode is memory-bound - they should not share a machine config), and
@@ -59,6 +65,13 @@ task-level evals) gated in CI.
 math throughput and halves weight/KV memory traffic versus BF16 with minimal, well-characterized
 quality loss. FP4/MXFP4 can double throughput again but risks reasoning degradation; we gate it to
 expert weights only and require it to pass the same eval bar as the FP8 baseline before promotion.
+
+**Quantization budget depends on role.** The small model's tolerable precision differs by use. As a
+**speculator**, its output is *verified token-by-token by the large target model*, so quantization
+errors only cost a few rejected guesses (lower speedup), never wrong answers - we can push it to FP4
+aggressively. As a **standalone client-facing tier**, its output is what the user sees, so it carries
+its own quality floor and accuracy-regression gate, and we quantize it more conservatively (FP8, FP4
+only if it clears the eval bar). Same checkpoint, two precision profiles.
 
 ### 2.2 Compute & memory access (SRAM vs HBM)
 
@@ -109,7 +122,9 @@ latency-tolerant transfers cross the 25 Gbps fabric.**
   expensive all-to-all off the slow VPC fabric.
 - **Dense long-context (8x node):** TP=8 intra-node; DP for replicas. PP added only if a single node
   can't hold weights + the large long-context KV.
-- **Draft model (1x node):** runs unsharded as a speculator co-located near the target model.
+- **Small model (1x node):** runs unsharded with high DP replica counts. The same checkpoint is
+  deployed in two configurations - a fleet of cheap standalone-tier replicas, and speculator
+  instances co-located near the big-model decode pool.
 
 ```mermaid
 flowchart LR
@@ -158,6 +173,25 @@ sequenceDiagram
 - **Mitigating latency compounding in agents:** multi-turn agents chain many calls, so per-call
   overhead compounds. We use **session affinity** (route follow-ups to the node that already holds
   the session KV) plus prefix-cache reuse so each turn pays near-zero re-prefill cost.
+
+### 3.4 Request routing & model cascade
+
+Matching request difficulty to model cost is one of the strongest tokens/sec/$ levers, so the router
+does more than load-balance - it decides *which model tier* should serve each request:
+
+- **Tiered routing:** a lightweight classifier (often the small model itself, or a cheap heuristic on
+  prompt features) estimates difficulty and routes easy requests (short Q&A, classification,
+  extraction, autocomplete) to the **standalone small-model tier**, reserving the expensive MoE /
+  long-context models for requests that need them.
+- **Cascade with escalation:** for ambiguous cases, the small model answers first and emits a
+  confidence signal (e.g., logprob/self-eval); low-confidence responses **escalate** to a larger
+  model. This caps cost on the easy majority while preserving quality on the hard tail, at the price
+  of added latency on escalated requests - so escalation thresholds are tuned per SLO tier.
+- **Speculative decoding path:** when a request is routed to a big model, the same small model is
+  reused as its **speculator** to cut ITL. One small model, two cost-saving jobs.
+- **Guardrails:** routing decisions are logged and benchmarked (acceptance rate, escalation rate,
+  quality delta vs. always-big) and stay within tenant isolation boundaries - no request or cache
+  crosses tenants during routing.
 
 ---
 
@@ -221,11 +255,14 @@ Performance optimizations must never leak across tenants:
 | Cross-node EP for MoE | Yes | Never | **Avoid**; keep EP intra-node, PP across nodes |
 | Prefill/decode placement | Co-located (simple) | Disaggregated (complex) | **Disaggregated** for flagship SLOs |
 | Prefix cache sharing | Cross-tenant (fast) | None | **Per-tenant only** (security non-negotiable) |
+| Small-model role | Standalone tier only | Speculator only | **Both** - standalone cheap tier + speculator, fed by request routing (§3.4) |
+| Routing strategy | Always cascade with escalation | Always route to big model | **Difficulty-based routing + confidence escalation**, thresholds tuned per SLO |
 | Cold-start strategy | Stream on demand | Always warm everything | **Hierarchical cache + predictive warm pools** |
 
 **Summary.** The architecture extracts maximum tokens/sec/dollar by (1) applying the lowest safe
 precision per tensor with eval gates, (2) keeping chatty TP/EP traffic intra-node while using PP/DP
 to scale across the slow fabric, (3) disaggregating prefill and decode so each phase is tuned and
-scaled independently with continuous batching and prefix reuse, and (4) eliminating cold-start
-latency through hierarchical caching and predictive warming - all under strict per-tenant isolation,
-with KPIs enforced by low-level profiling and CI regression gates.
+scaled independently with continuous batching and prefix reuse, (4) matching request difficulty to
+model cost via difficulty-based routing and a small-model tier that doubles as a speculator, and
+(5) eliminating cold-start latency through hierarchical caching and predictive warming - all under
+strict per-tenant isolation, with KPIs enforced by low-level profiling and CI regression gates.
