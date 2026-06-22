@@ -13,3 +13,7 @@ venv/
 
 # Rendered/exported artifacts (we keep Mermaid source, not exports)
 *.tmp
+
+# Java / Maven build output
+target/
+*.class
