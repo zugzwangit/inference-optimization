@@ -302,3 +302,44 @@ tuned on its own, with tight request packing and reuse of shared beginnings; (4)
 to the right-sized model and reusing the small model as a speed helper; and (5) avoiding slow
 startups with a layered cache and warming up ahead of demand - all while keeping every customer's
 data fully separate and proving our numbers with deep profiling and automatic quality/speed gates.
+
+---
+
+## 7. The Inference Service Endpoint
+
+Pulling it together: the endpoint is the only thing customers see. It is a thin, stateless front
+door - the heavy lifting stays in the data plane, and all configuration comes from the control plane.
+Here both planes are drawn as black boxes (their internals are covered in
+[`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md)); the focus is the endpoint itself.
+
+```mermaid
+flowchart LR
+    Client["Clients / Agents<br/>(multiple tenants)"]
+
+    subgraph endpoint [Inference Service Endpoint - the public service]
+        API["API surface<br/>HTTPS / gRPC, token streaming (SSE)"]
+        Auth["AuthN/Z + tenant identity<br/>rate limits, quotas"]
+        Contract["Request/response contract<br/>OpenAI-compatible schema, model selection, versioning"]
+    end
+
+    CP["CONTROL PLANE<br/>(black box)"]
+    DP["DATA PLANE<br/>(black box)"]
+
+    Client -->|"1. request (prompt, model, stream=true)"| API
+    API --> Auth --> Contract
+    Contract -->|"2. forward authenticated, tenant-scoped request"| DP
+    DP -->|"3. streamed tokens"| API
+    API -->|"4. streamed response"| Client
+
+    CP -->|"publishes validated models + runtime config"| DP
+    DP -.->|"telemetry / health"| CP
+    CP -.->|"endpoint config: live model versions, SLO tier"| Contract
+```
+
+The endpoint's real jobs are **identity and contract** - authenticate the caller, attach a trusted
+tenant identity, enforce quotas, validate the request, pick the requested model/version, and stream
+tokens back. It performs no inference itself: it forwards each authenticated, tenant-scoped request
+to the data plane and relays the streamed tokens to the client. The control plane feeds both sides -
+publishing validated models and config to the data plane, and telling the endpoint which model
+versions are live and at what SLO tier. This separation keeps the public surface stable even as
+models and infrastructure change behind it.
